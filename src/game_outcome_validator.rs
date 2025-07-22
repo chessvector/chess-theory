@@ -280,21 +280,9 @@ impl GameOutcomeValidator {
                 let feature_x = self.extract_feature_value(&position_vector, &feature_names.0);
                 let pattern_value = coefficient * feature_x + intercept;
                 
-                // Debug: Check if values are varying
-                if pos_idx == 0 && game.positions.len() > 1 {
-                    println!("DEBUG Linear: feature_x={:.6}, coefficient={:.6}, intercept={:.6}, pattern_value={:.6}", 
-                             feature_x, coefficient, intercept, pattern_value);
-                }
                 
                 let predicted_outcome = self.predict_outcome_from_value(pattern_value);
                 
-                // Debug thresholds for first game
-                if pos_idx == 0 && game.positions.len() > 1 {
-                    let win_threshold = self.calculate_optimal_win_threshold();
-                    let draw_threshold = self.calculate_optimal_draw_threshold();
-                    println!("DEBUG Thresholds: win={:.6}, draw={:.6}, value={:.6}, predicted={:?}", 
-                             win_threshold, draw_threshold, pattern_value, predicted_outcome);
-                }
                 
                 let is_correct = self.prediction_matches_outcome(&predicted_outcome, &game.outcome);
                 if is_correct {

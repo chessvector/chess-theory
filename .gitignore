@@ -38,3 +38,17 @@ logs/
 # Temporary files
 *.tmp
 *.temp
+
+# Chess Discovery Data - large binary files
+chess_discovery_data/
+!chess_discovery_data/README.md
+
+# Discovery session snapshots and backups
+*.bin
+*.backup
+chess_discovery_*.json
+
+# Large PGN databases
+*.pgn
+*.pgn.gz
+*.pgn.bz2
