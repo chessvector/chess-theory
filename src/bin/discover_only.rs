@@ -317,6 +317,19 @@ fn main() -> Result<()> {
                 Ok(_) => println!("   ✅ Discoveries saved successfully"),
                 Err(e) => println!("   ❌ Failed to save discoveries: {}", e),
             }
+            
+            // ALSO save the engine snapshot for test-findings to load
+            let snapshot_path = format!("chess_discovery_data/engine_snapshot_cycle_{}.json", cycle);
+            match serde_json::to_string_pretty(&discovery_engine) {
+                Ok(json_content) => {
+                    if let Err(e) = std::fs::write(&snapshot_path, json_content) {
+                        println!("   ⚠️ Failed to save engine snapshot: {}", e);
+                    } else {
+                        println!("   💾 Engine snapshot saved: {}", snapshot_path);
+                    }
+                },
+                Err(e) => println!("   ⚠️ Failed to serialize engine: {}", e),
+            }
         }
         
         // Show progress
