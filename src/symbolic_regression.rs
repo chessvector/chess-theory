@@ -382,6 +382,7 @@ pub struct SymbolicRegressionConfig {
     pub elitism_rate: f64,
     pub complexity_penalty: f64,
     pub target_fitness: f64,
+    pub verbose_logging: bool,
 }
 
 impl Default for SymbolicRegressionConfig {
@@ -393,8 +394,9 @@ impl Default for SymbolicRegressionConfig {
             mutation_rate: 0.18,        // Higher mutation for exploration
             crossover_rate: 0.75,       // Balanced crossover
             elitism_rate: 0.12,         // Keep more elite individuals
-            complexity_penalty: 0.003,  // Very low penalty to encourage complexity
+            complexity_penalty: 0.015,  // Moderate penalty to reduce function noise
             target_fitness: 0.85,       // More achievable target for complex patterns
+            verbose_logging: false,     // Reduce spam by default
         }
     }
 }
@@ -419,9 +421,11 @@ impl SymbolicRegression {
             return Err(anyhow::anyhow!("Empty input data"));
         }
         
-        println!("🧬 Starting symbolic regression evolution");
-        println!("   Population: {}, Generations: {}", 
-                 self.config.population_size, self.config.max_generations);
+        if self.config.verbose_logging {
+            println!("🧬 Starting symbolic regression evolution");
+            println!("   Population: {}, Generations: {}", 
+                     self.config.population_size, self.config.max_generations);
+        }
         
         // Generate initial population
         let mut population = self.generate_initial_population();
@@ -442,7 +446,7 @@ impl SymbolicRegression {
                     best_fitness = current_best;
                     best_expression = population[best_idx].clone();
                     
-                    if generation % 10 == 0 {
+                    if self.config.verbose_logging && generation % 10 == 0 {
                         println!("   Generation {}: Best fitness = {:.6}, Expression = {}", 
                                  generation, best_fitness, best_expression);
                     }
@@ -451,7 +455,9 @@ impl SymbolicRegression {
             
             // Early stopping
             if best_fitness > self.config.target_fitness {
-                println!("   🎯 Target fitness reached at generation {}", generation);
+                if self.config.verbose_logging {
+                    println!("   🎯 Target fitness reached at generation {}", generation);
+                }
                 break;
             }
             
@@ -459,7 +465,9 @@ impl SymbolicRegression {
             population = self.evolve_population(&population, &fitness_scores);
         }
         
-        println!("🧬 Evolution complete. Best fitness: {:.6}", best_fitness);
+        if self.config.verbose_logging {
+            println!("🧬 Evolution complete. Best fitness: {:.6}", best_fitness);
+        }
         Ok((best_expression, best_fitness))
     }
     

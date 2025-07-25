@@ -515,7 +515,7 @@ impl ChessMathematicalDiscoveryEngine {
         
         let exploration_config = ExplorationConfig {
             batch_size: 100,
-            stability_threshold: 0.95,
+            stability_threshold: 0.85,
             correlation_threshold: 0.9,
             validation_threshold: 0.85,
             max_function_complexity: 50.0,
@@ -530,6 +530,21 @@ impl ChessMathematicalDiscoveryEngine {
             progress_state,
             exploration_config,
         })
+    }
+    
+    /// Update engine configuration with new thresholds
+    pub fn update_configuration(&mut self, 
+        stability_threshold: f64,
+        correlation_threshold: f64, 
+        validation_threshold: f64,
+        preservation_threshold: f64,
+        batch_size: usize
+    ) {
+        self.exploration_config.stability_threshold = stability_threshold;
+        self.exploration_config.correlation_threshold = correlation_threshold;
+        self.exploration_config.validation_threshold = validation_threshold;
+        self.exploration_config.preservation_threshold = preservation_threshold;
+        self.exploration_config.batch_size = batch_size;
     }
     
     /// Main discovery cycle: Ω_{t+1} = Φ(Ω_t, X_t)
@@ -606,6 +621,7 @@ impl ChessMathematicalDiscoveryEngine {
         let mut patterns = Vec::new();
         
         if vectors.is_empty() {
+            println!("⚠️ Constant discovery: No position vectors provided");
             return Ok(patterns);
         }
         
@@ -613,14 +629,25 @@ impl ChessMathematicalDiscoveryEngine {
         let strategic_start = 768;
         let num_features = vectors[0].len();
         
+        println!("🔍 Constant discovery: Analyzing {} vectors with {} features", vectors.len(), num_features);
+        println!("   Stability threshold: {:.3}", self.exploration_config.stability_threshold);
+        
         // Analyze chess-specific strategic ratios and relationships
-        patterns.extend(self.discover_chess_strategic_constants(vectors)?);
+        let strategic_constants = self.discover_chess_strategic_constants(vectors)?;
+        println!("   Found {} strategic constants", strategic_constants.len());
+        patterns.extend(strategic_constants);
         
         // Look for stable ratios between different strategic components
-        patterns.extend(self.discover_strategic_ratios(vectors)?);
+        let ratio_constants = self.discover_strategic_ratios(vectors)?;
+        println!("   Found {} strategic ratio constants", ratio_constants.len());
+        patterns.extend(ratio_constants);
         
         // Find positional constants (like center vs edge importance)
-        patterns.extend(self.discover_positional_constants(vectors)?);
+        let positional_constants = self.discover_positional_constants(vectors)?;
+        println!("   Found {} positional constants", positional_constants.len());
+        patterns.extend(positional_constants);
+        
+        println!("   Total constants before filtering: {}", patterns.len());
         
         Ok(patterns)
     }
@@ -1017,6 +1044,8 @@ impl ChessMathematicalDiscoveryEngine {
     fn discover_chess_strategic_constants(&self, vectors: &[Array1<f64>]) -> Result<Vec<DiscoveredPattern>> {
         let mut patterns = Vec::new();
         
+        println!("   🔍 Strategic constant discovery starting...");
+        
         // Extract strategic components from each position
         let mut material_ratios = Vec::new();
         let mut center_control_ratios = Vec::new();
@@ -1040,21 +1069,34 @@ impl ChessMathematicalDiscoveryEngine {
             // Development (index 773)
             let development = vector[773];
             
-            // Calculate meaningful chess ratios
-            if material.abs() > 0.01 {
-                material_ratios.push(positional / material);
+            // Calculate meaningful chess ratios with better sanitization
+            if material.abs() > 0.001 {
+                let ratio = positional / material;
+                if ratio.is_finite() && ratio.abs() < 1000.0 {
+                    material_ratios.push(ratio);
+                }
             }
             
-            if center_control.abs() > 0.01 {
-                center_control_ratios.push(development / center_control);
+            if center_control.abs() > 0.001 {
+                let ratio = development / center_control;
+                if ratio.is_finite() && ratio.abs() < 1000.0 {
+                    center_control_ratios.push(ratio);
+                }
             }
             
-            if white_king_safety != 0.0 && black_king_safety != 0.0 {
-                king_safety_ratios.push(white_king_safety / black_king_safety);
+            if white_king_safety.abs() > 0.001 && black_king_safety.abs() > 0.001 {
+                let ratio = white_king_safety / black_king_safety;
+                // Clamp extreme ratios to prevent numerical instability
+                if ratio.is_finite() && ratio.abs() < 1000.0 {
+                    king_safety_ratios.push(ratio);
+                }
             }
             
-            if material.abs() > 0.01 {
-                development_ratios.push(development / material.abs());
+            if material.abs() > 0.001 {
+                let ratio = development / material.abs();
+                if ratio.is_finite() && ratio.abs() < 1000.0 {
+                    development_ratios.push(ratio);
+                }
             }
         }
         
@@ -1080,12 +1122,18 @@ impl ChessMathematicalDiscoveryEngine {
             let center_control = vector[772];
             let development = vector[773];
             
-            if center_control.abs() > 0.01 {
-                pawn_structure_ratios.push(pawn_structure / center_control);
+            if center_control.abs() > 0.001 {
+                let ratio = pawn_structure / center_control;
+                if ratio.is_finite() && ratio.abs() < 1000.0 {
+                    pawn_structure_ratios.push(ratio);
+                }
             }
             
-            if development.abs() > 0.01 {
-                piece_activity_ratios.push(center_control / development);
+            if development.abs() > 0.001 {
+                let ratio = center_control / development;
+                if ratio.is_finite() && ratio.abs() < 1000.0 {
+                    piece_activity_ratios.push(ratio);
+                }
             }
         }
         
@@ -1142,7 +1190,15 @@ impl ChessMathematicalDiscoveryEngine {
     fn check_ratio_stability(&self, name: &str, ratios: &[f64]) -> Result<Vec<DiscoveredPattern>> {
         let mut patterns = Vec::new();
         
-        if ratios.len() < 3 || ratios.iter().any(|&x| !x.is_finite()) {
+        println!("     📊 Checking stability for '{}' with {} ratios", name, ratios.len());
+        
+        if ratios.len() < 3 {
+            println!("       ⚠️ Too few ratios ({} < 3) - skipping", ratios.len());
+            return Ok(patterns);
+        }
+        
+        if ratios.iter().any(|&x| !x.is_finite()) {
+            println!("       ⚠️ Non-finite values detected - skipping");
             return Ok(patterns);
         }
         
@@ -1151,19 +1207,29 @@ impl ChessMathematicalDiscoveryEngine {
             .map(|&x| (x - mean).powi(2))
             .sum::<f64>() / ratios.len() as f64;
         
-        if mean.abs() > 0.01 {
+        println!("       Mean: {:.6}, Variance: {:.6}", mean, variance);
+        
+        if mean.abs() > 0.001 { // Lowered from 0.01 to allow smaller meaningful ratios
             let coefficient_of_variation = variance.sqrt() / mean.abs();
             let stability = 1.0 / (1.0 + coefficient_of_variation);
             
-            // Only report truly stable chess constants (higher threshold)
-            if stability > 0.98 {
+            println!("       CV: {:.6}, Stability: {:.6} (threshold: {:.3})", 
+                     coefficient_of_variation, stability, self.exploration_config.stability_threshold);
+            
+            // Use configured stability threshold
+            if stability > self.exploration_config.stability_threshold {
+                println!("       ✅ Constant discovered: {} = {:.6} (stability: {:.6})", name, mean, stability);
                 patterns.push(DiscoveredPattern::Constant {
                     name: name.to_string(),
                     value: mean,
                     stability,
                     occurrences: ratios.len(),
                 });
+            } else {
+                println!("       ❌ Stability too low: {:.6} < {:.3}", stability, self.exploration_config.stability_threshold);
             }
+        } else {
+            println!("       ❌ Mean too small: {:.6} < 0.001", mean.abs());
         }
         
         Ok(patterns)
@@ -1179,6 +1245,8 @@ impl ChessMathematicalDiscoveryEngine {
         }
         
         let num_features = vectors[0].len();
+        let mut symbolic_attempts = 0;
+        let mut strategic_features_tested = 0;
         
         // Test pairwise relationships between features - prioritize symbolic over linear
         for i in 0..num_features {
@@ -1193,7 +1261,12 @@ impl ChessMathematicalDiscoveryEngine {
                 
                 // PRIORITIZE: Test symbolic regression first for non-linear patterns
                 let symbolic_found = if self.should_run_symbolic_regression(i, j, &x_values, &y_values) {
-                    if let Some(symbolic_pattern) = self.test_symbolic_regression(&x_values, &y_values, i, j)? {
+                    symbolic_attempts += 1;
+                    if self.is_strategic_feature(i) || self.is_strategic_feature(j) {
+                        strategic_features_tested += 1;
+                    }
+                    
+                    if let Some(symbolic_pattern) = self.test_symbolic_regression(&x_values, &y_values, i, j, vectors)? {
                         patterns.push(symbolic_pattern);
                         true
                     } else {
@@ -1218,6 +1291,11 @@ impl ChessMathematicalDiscoveryEngine {
                 }
             }
         }
+        
+        println!("🔍 Function discovery summary:");
+        println!("   Symbolic regression attempts: {}", symbolic_attempts);
+        println!("   Strategic features tested: {}", strategic_features_tested);
+        println!("   Total functional patterns: {}", patterns.len());
         
         Ok(patterns)
     }
@@ -1434,11 +1512,39 @@ impl ChessMathematicalDiscoveryEngine {
         Ok(solution)
     }
     
+    /// Determines if a feature is strategically important for chess analysis
+    fn is_strategic_feature(&self, feature_idx: usize) -> bool {
+        // Strategic features start at index 768
+        if feature_idx >= 768 {
+            return true;
+        }
+        
+        // Also include key piece positions (center squares, key squares)
+        // Piece positions are in first 768 features (12 pieces × 64 squares)
+        let square_idx = feature_idx % 64;
+        let piece_type = feature_idx / 64;
+        
+        // Center squares (d4, d5, e4, e5)
+        let center_squares = [27, 28, 35, 36]; // d4, d5, e4, e5 in 0-63 indexing
+        if center_squares.contains(&square_idx) {
+            return true;
+        }
+        
+        // Important pieces (kings, queens, key pieces)
+        if piece_type == 0 || piece_type == 6 || // White/Black king
+           piece_type == 1 || piece_type == 7 || // White/Black queen
+           piece_type == 5 || piece_type == 11 { // White/Black knights
+            return true;
+        }
+        
+        false
+    }
+    
     /// Determines if symbolic regression should be run for a feature pair
     /// Enhanced to prioritize symbolic expression discovery over linear patterns
     fn should_run_symbolic_regression(&self, feature_i: usize, feature_j: usize, x_values: &[f64], y_values: &[f64]) -> bool {
-        // Prioritize strategic features (768+) but also include meaningful piece position relationships
-        let strategic_priority = feature_i >= 768 || feature_j >= 768;
+        // Enhanced strategic feature identification
+        let strategic_priority = self.is_strategic_feature(feature_i) || self.is_strategic_feature(feature_j);
         
         // Also allow piece-to-strategic relationships for complex pattern discovery
         let cross_domain = (feature_i < 768 && feature_j >= 768) || (feature_i >= 768 && feature_j < 768);
@@ -1461,6 +1567,12 @@ impl ChessMathematicalDiscoveryEngine {
             return false;
         }
         
+        // Pre-filter based on correlation - only run symbolic regression on interesting relationships
+        let correlation = self.compute_correlation(x_values, y_values);
+        if correlation.abs() < 0.3 && !strategic_priority {
+            return false; // Skip weak correlations for non-strategic features
+        }
+        
         // Significantly increase symbolic regression frequency for strategic features
         if strategic_priority {
             // Run on most strategic feature pairs (much more aggressive)
@@ -1479,6 +1591,7 @@ impl ChessMathematicalDiscoveryEngine {
         y_values: &[f64],
         feature_i: usize,
         feature_j: usize,
+        position_vectors: &[Array1<f64>],
     ) -> Result<Option<DiscoveredPattern>> {
         // Configure symbolic regression for strategic chess discovery - prioritize complexity
         let config = SymbolicRegressionConfig {
@@ -1488,19 +1601,21 @@ impl ChessMathematicalDiscoveryEngine {
             mutation_rate: 0.20,    // Higher mutation to explore more patterns
             crossover_rate: 0.8,    // Higher crossover for complex recombination
             elitism_rate: 0.15,     // Keep more elite individuals
-            complexity_penalty: 0.005, // Much lower penalty to encourage complex patterns
+            complexity_penalty: 0.015, // Moderate penalty to reduce function noise
             target_fitness: 0.75,   // Lower threshold to find more diverse patterns
+            verbose_logging: false, // Reduce spam
         };
         
-        // Convert data to ndarray format
-        let inputs: Vec<Array1<f64>> = x_values.iter()
-            .map(|&x| Array1::from_vec(vec![x]))
+        // Convert complete position vectors to ndarray format
+        let inputs: Vec<Array1<f64>> = position_vectors.iter()
+            .map(|vec| vec.clone())
             .collect();
         
         let targets: Vec<f64> = y_values.to_vec();
         
-        // Run symbolic regression
-        let sr = SymbolicRegression::new(config, 1); // 1 input variable
+        // Run symbolic regression with full feature dimensionality
+        let num_features = position_vectors[0].len();
+        let sr = SymbolicRegression::new(config, num_features);
         
         match sr.evolve(&inputs, &targets) {
             Ok((expression, fitness)) => {
@@ -1512,7 +1627,9 @@ impl ChessMathematicalDiscoveryEngine {
                     let y_mean: f64 = y_values.iter().sum::<f64>() / y_values.len() as f64;
                     
                     for (i, &y_actual) in y_values.iter().enumerate() {
-                        let y_pred = expression.evaluate(&[x_values[i]]);
+                        // FIX: Pass complete position vector instead of single feature
+                        let position_slice = position_vectors[i].as_slice().unwrap();
+                        let y_pred = expression.evaluate(position_slice);
                         if y_pred.is_finite() {
                             total_error += (y_actual - y_pred).powi(2);
                         }
@@ -1525,6 +1642,13 @@ impl ChessMathematicalDiscoveryEngine {
                         0.0
                     };
                     
+                    // Log symbolic expression quality
+                    println!("      ✅ Symbolic expression discovered:");
+                    println!("         Expression: {}", expression);
+                    println!("         Fitness: {:.6}, R²: {:.6}, Complexity: {}", 
+                             fitness, r_squared, expression.complexity());
+                    println!("         Features: {} → {}", feature_i, feature_j);
+                    
                     // Accept based on fitness (which includes strategic scoring), not just R²
                     Ok(Some(DiscoveredPattern::SymbolicExpression {
                         expression: expression.clone(),
@@ -1534,6 +1658,7 @@ impl ChessMathematicalDiscoveryEngine {
                         r_squared, // For reporting only
                     }))
                 } else {
+                    println!("      ❌ Symbolic expression rejected (fitness {:.6} < 0.5)", fitness);
                     Ok(None)
                 }
             },
@@ -1551,6 +1676,35 @@ impl ChessMathematicalDiscoveryEngine {
         values.iter()
             .map(|x| (x - mean).powi(2))
             .sum::<f64>() / values.len() as f64
+    }
+    
+    /// Helper function to compute correlation coefficient
+    fn compute_correlation(&self, x_values: &[f64], y_values: &[f64]) -> f64 {
+        if x_values.len() != y_values.len() || x_values.len() < 2 {
+            return 0.0;
+        }
+        
+        let n = x_values.len() as f64;
+        let x_mean = x_values.iter().sum::<f64>() / n;
+        let y_mean = y_values.iter().sum::<f64>() / n;
+        
+        let mut numerator = 0.0;
+        let mut x_sum_sq = 0.0;
+        let mut y_sum_sq = 0.0;
+        
+        for (&x, &y) in x_values.iter().zip(y_values.iter()) {
+            let x_diff = x - x_mean;
+            let y_diff = y - y_mean;
+            numerator += x_diff * y_diff;
+            x_sum_sq += x_diff * x_diff;
+            y_sum_sq += y_diff * y_diff;
+        }
+        
+        if x_sum_sq == 0.0 || y_sum_sq == 0.0 {
+            return 0.0;
+        }
+        
+        numerator / (x_sum_sq.sqrt() * y_sum_sq.sqrt())
     }
     
     /// Discover mathematical invariants
@@ -1956,7 +2110,7 @@ impl ChessMathematicalDiscoveryEngine {
                     self.validate_polynomial_relationship(*degree, *r_squared, feature_names)
                 },
                 _ => {
-                    println!("   📊 Validating other pattern type");
+                    // Quietly validate other patterns without spam
                     Ok(true) // Other patterns pass by default for now
                 }
             };
@@ -1964,7 +2118,13 @@ impl ChessMathematicalDiscoveryEngine {
             match validation_result {
                 Ok(true) => {
                     successful_validations += 1;
-                    println!("      ✅ Validation PASSED for pattern {}", i + 1);
+                    // Only log validation for important patterns
+                    match pattern {
+                        DiscoveredPattern::Constant { .. } => {
+                            println!("      ✅ Constant validation PASSED for pattern {}", i + 1);
+                        },
+                        _ => {} // Quiet validation for other patterns
+                    }
                 },
                 Ok(false) => {
                     println!("      ❌ Validation FAILED for pattern {}", i + 1);
@@ -2007,7 +2167,15 @@ impl ChessMathematicalDiscoveryEngine {
         let is_valid = stability_valid && value_reasonable;
         
         if !is_valid {
-            println!("      🔍 Validation details: stability={:.3}, value={:.3}", stability, value);
+            println!("      ❌ Constant validation failed:");
+            println!("         Stability: {:.3} (threshold: {:.3}) - {}", 
+                     stability, self.exploration_config.stability_threshold,
+                     if stability_valid { "PASS" } else { "FAIL" });
+            println!("         Value: {:.3} (finite: {}, reasonable: {}) - {}", 
+                     value, value.is_finite(), value.abs() < 1000.0,
+                     if value_reasonable { "PASS" } else { "FAIL" });
+        } else {
+            println!("      ✅ Constant validation passed: stability={:.3}, value={:.3}", stability, value);
         }
         
         Ok(is_valid)
@@ -2115,7 +2283,7 @@ impl Default for ExplorationConfig {
     fn default() -> Self {
         Self {
             batch_size: 100,
-            stability_threshold: 0.95,
+            stability_threshold: 0.85,
             correlation_threshold: 0.9,
             validation_threshold: 0.85,
             max_function_complexity: 50.0,

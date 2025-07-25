@@ -11,7 +11,7 @@ use ndarray::{Array1, Array2};
 use chess_theory::{
     ChessDataLoader, 
     ChessMathematicalDiscoveryEngine, MathematicalDimensionalReducer,
-    DiscoveryPersistenceManager
+    DiscoveryPersistenceManager, intelligent_explorer::IntelligentExplorer
 };
 
 // Chess position and related types are imported from the main crate
@@ -50,21 +50,50 @@ fn main() -> Result<()> {
     // Initialize persistence manager
     let persistence_manager = DiscoveryPersistenceManager::new("chess_discovery_data")?;
     
-    // Generate diverse chess positions for discovery
-    println!("♟️  Generating diverse chess positions...");
-    let mut chess_loader = ChessDataLoader::new();
-    let positions = chess_loader.load_diverse_dataset(discovery_config.position_count)?;
+    // Try to load previous session to build on existing discoveries
+    println!("🔄 Checking for previous discovery sessions...");
+    match persistence_manager.list_available_sessions() {
+        Ok(sessions) => {
+            if let Some(latest_session) = sessions.first() {
+                println!("   Found {} existing sessions", sessions.len());
+                match persistence_manager.load_session_snapshot(&latest_session.filepath) {
+                    Ok(snapshot) => {
+                        println!("   ✅ Loading previous session: {}", snapshot.session_metadata.session_id);
+                        println!("      Previous constants discovered: {}", snapshot.statistics.constants_discovered);
+                        println!("      Previous positions analyzed: {}", snapshot.statistics.positions_analyzed);
+                        
+                        // Restore engine state from snapshot
+                        discovery_engine = persistence_manager.restore_engine_from_snapshot(&snapshot)?;
+                        println!("   🔄 Engine state restored - building on previous discoveries");
+                        
+                        // Update configuration to use current optimized thresholds
+                        discovery_engine.update_configuration(
+                            0.85,  // stability_threshold (lowered for better discovery)
+                            0.7,   // correlation_threshold
+                            0.6,   // validation_threshold
+                            0.95,  // preservation_threshold
+                            100    // batch_size
+                        );
+                        println!("   ⚙️ Updated configuration: stability_threshold=0.85");
+                    }
+                    Err(e) => {
+                        println!("   ⚠️ Could not load previous session: {} - starting fresh", e);
+                    }
+                }
+            } else {
+                println!("   No previous sessions found - starting fresh discovery");
+            }
+        }
+        Err(e) => {
+            println!("   ⚠️ Could not check for sessions: {} - starting fresh", e);
+        }
+    }
     
-    println!("✅ Generated {} positions for mathematical analysis", positions.len());
+    // Initialize intelligent explorer
+    println!("🧠 Initializing Intelligent Explorer...");
+    let mut explorer = IntelligentExplorer::new()?;
     
-    // Convert positions to feature vectors
-    println!("🔢 Converting positions to mathematical vectors...");
-    let position_vectors: Vec<Array1<f64>> = positions
-        .iter()
-        .map(|pos| pos.to_vector())
-        .collect();
-    
-    println!("✅ Created {} 1024-dimensional vectors", position_vectors.len());
+    println!("{}", explorer.get_progress_report());
     
     // Run discovery cycles
     println!("\n🚀 Starting Mathematical Discovery Cycles...");
@@ -74,6 +103,17 @@ fn main() -> Result<()> {
     
     for cycle in 1..=discovery_config.max_cycles {
         println!("\n📈 Discovery Cycle {}/{}", cycle, discovery_config.max_cycles);
+        
+        // Generate positions for this cycle using intelligent explorer
+        println!("🎯 Generating positions for cycle {}...", cycle);
+        let positions = explorer.generate_next_batch(discovery_config.position_count)?;
+        println!("✅ Generated {} positions from {}", positions.len(), explorer.state.current_opening);
+        
+        // Convert positions to feature vectors
+        let position_vectors: Vec<Array1<f64>> = positions
+            .iter()
+            .map(|pos| pos.to_vector())
+            .collect();
         
         // Run pattern discovery
         let cycle_start = SystemTime::now();
@@ -97,6 +137,25 @@ fn main() -> Result<()> {
         println!("   Constants discovered: {}", constants_count);
         println!("   Linear functions discovered: {}", functions_count);
         println!("   Symbolic expressions discovered: {}", symbolic_count);
+        
+        // Analyze symbolic expression quality
+        if symbolic_count > 0 {
+            let symbolic_expressions: Vec<_> = discovered_patterns.iter()
+                .filter_map(|p| match p {
+                    chess_theory::DiscoveredPattern::SymbolicExpression { fitness, complexity, .. } => {
+                        Some((*fitness, *complexity))
+                    },
+                    _ => None
+                })
+                .collect();
+            
+            if !symbolic_expressions.is_empty() {
+                let avg_fitness = symbolic_expressions.iter().map(|(f, _)| f).sum::<f64>() / symbolic_expressions.len() as f64;
+                let avg_complexity = symbolic_expressions.iter().map(|(_, c)| c).sum::<usize>() / symbolic_expressions.len();
+                println!("      Average fitness: {:.3}, Average complexity: {}", avg_fitness, avg_complexity);
+            }
+        }
+        
         println!("   Total patterns discovered: {}", discovered_patterns.len());
         println!("   Cycle time: {:.2}s", cycle_time.as_secs_f64());
         
@@ -104,23 +163,45 @@ fn main() -> Result<()> {
         total_functions += functions_count;
         total_patterns += discovered_patterns.len();
         
+        // Update explorer state with discovery results
+        explorer.update_state(constants_count);
+        
         // Apply dimensional reduction
         if discovery_config.enable_dimensional_reduction {
             println!("   🔄 Applying dimensional reduction...");
-            // Create default PCA analysis
-            let pca_analysis = chess_theory::PCAAnalysis {
-                eigenvalues: Array1::zeros(512),
-                eigenvectors: Array2::zeros((1024, 512)),
-                mean_vector: Array1::zeros(1024),
-                explained_variance_ratio: Array1::zeros(512),
-                cumulative_explained_variance: Array1::zeros(512),
+            
+            // Perform actual PCA analysis
+            let pca_analysis = dimensional_reducer.analyze_with_pca(&position_vectors)?;
+            println!("      PCA computed {} eigenvalues, total variance: {:.6}", 
+                     pca_analysis.eigenvalues.len(), 
+                     pca_analysis.eigenvalues.sum());
+            
+            // Ensure target dimensions don't exceed available PCA components
+            let max_possible_dim = std::cmp::min(
+                std::cmp::min(512, position_vectors[0].len() - 1),
+                pca_analysis.eigenvalues.len()
+            );
+            let target_dim = if max_possible_dim < 10 { 
+                max_possible_dim 
+            } else { 
+                std::cmp::max(10, max_possible_dim / 2) // Use half of available components, min 10
             };
-            let (reduced_vectors, _) = dimensional_reducer.reduce_dimensions(
+            
+            println!("      Target dimensions: {} (from {} available PCA components)", 
+                     target_dim, pca_analysis.eigenvalues.len());
+                     
+            let (reduced_vectors, reduction_info) = dimensional_reducer.reduce_dimensions(
                 &position_vectors, 
-                512, // Reduce to 512 dimensions
+                target_dim,
                 &pca_analysis
             )?;
-            println!("   📉 Reduced to {} dimensions", reduced_vectors.len());
+            println!("   📉 Reduced to {} dimensions ({}% variance preserved)", 
+                     reduced_vectors.len(), 
+                     (reduction_info.preserved_variance * 100.0) as i32);
+                     
+            if reduction_info.preserved_variance < 0.1 {
+                println!("      ⚠️ Low variance preservation - possible PCA issue");
+            }
         }
         
         // Persist discoveries

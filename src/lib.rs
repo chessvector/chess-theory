@@ -8,6 +8,7 @@ pub mod feature_mapper;
 pub mod symbolic_regression;
 pub mod chess_data_loader;
 pub mod game_outcome_validator;
+pub mod intelligent_explorer;
 
 pub use discovery_engine::*;
 pub use chess_data_loader::*;
@@ -37,16 +38,16 @@ pub struct ChessPosition {
     castling_rights: CastlingRights,
     en_passant_target: Option<Square>,
     halfmove_clock: u32,
-    fullmove_number: u32,
+    pub fullmove_number: u32,
     
     /// Cached strategic evaluations - components of φ(s) ∈ ℝ^{1024}
     /// These contribute to the vector embedding function
-    material_balance: f64,      // ∑ material_value_i for i ∈ pieces
-    positional_score: f64,      // ∑ position_value_i for i ∈ squares
-    king_safety: [f64; 2],      // [white_safety, black_safety]
-    center_control: f64,        // ∑ control_value_i for i ∈ center_squares
-    development: f64,           // measure of piece development
-    pawn_structure: f64,        // pawn formation evaluation
+    pub material_balance: f64,      // ∑ material_value_i for i ∈ pieces
+    pub positional_score: f64,      // ∑ position_value_i for i ∈ squares
+    pub king_safety: [f64; 2],      // [white_safety, black_safety]
+    pub center_control: f64,        // ∑ control_value_i for i ∈ center_squares
+    pub development: f64,           // measure of piece development
+    pub pawn_structure: f64,        // pawn formation evaluation
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Copy)]
@@ -216,21 +217,50 @@ impl ChessPosition {
 
     pub fn to_vector(&self) -> Array1<f64> {
         let mut vector = Array1::zeros(1024);
+        
+        // Basic position features (early indices)
         vector[0] = self.material_balance;
         vector[1] = self.positional_score;
         vector[2] = if self.white_to_move { 1.0 } else { 0.0 };
         vector[3] = self.fullmove_number as f64;
-        
-        // Add king safety
         vector[4] = self.king_safety[0];
         vector[5] = self.king_safety[1];
-        
-        // Add other strategic features
         vector[6] = self.center_control;
         vector[7] = self.development;
         vector[8] = self.pawn_structure;
         
+        // ALSO map to strategic discovery indices (768-774) where discovery engine expects them
+        vector[768] = self.material_balance;      // Expected by discovery engine
+        vector[769] = self.positional_score;      // Expected by discovery engine  
+        vector[770] = self.king_safety[0];        // White king safety
+        vector[771] = self.king_safety[1];        // Black king safety
+        vector[772] = self.center_control;        // Expected by discovery engine
+        vector[773] = self.development;           // Expected by discovery engine
+        vector[774] = self.pawn_structure;        // Expected by discovery engine
+        
         vector
+    }
+
+    /// Set strategic evaluation fields (for position generation)
+    pub fn set_strategic_evaluations(&mut self, 
+        material_balance: f64,
+        positional_score: f64, 
+        king_safety: [f64; 2],
+        center_control: f64,
+        development: f64,
+        pawn_structure: f64
+    ) {
+        self.material_balance = material_balance;
+        self.positional_score = positional_score;
+        self.king_safety = king_safety;
+        self.center_control = center_control;
+        self.development = development;
+        self.pawn_structure = pawn_structure;
+    }
+
+    /// Set fullmove number (for position generation)
+    pub fn set_fullmove_number(&mut self, fullmove_number: u32) {
+        self.fullmove_number = fullmove_number;
     }
 
     /// Update cached evaluations based on board state
